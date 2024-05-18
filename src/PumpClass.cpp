@@ -1,6 +1,6 @@
 #include "PumpClass.h"
 
-PumpClass::PumpClass(int p, String nm, bool ety) : pin(p), name(nm), empty(ety) {}
+PumpClass::PumpClass(int p, String nm, bool ety, bool st, int tk) : pin(p), name(nm), empty(ety), state(st), takaran(tk) {}
 
 void PumpClass::initialize()
 {

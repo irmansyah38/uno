@@ -11,7 +11,9 @@ public:
   int pin;
   String name;
   bool empty;
-  PumpClass(int p, String nm, bool ety);
+  bool state;
+  int takaran;
+  PumpClass(int p, String nm, bool ety, bool st, int tk);
   void initialize();
   void on();
   void off();

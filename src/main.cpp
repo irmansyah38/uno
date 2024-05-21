@@ -1,51 +1,85 @@
 #include <Arduino.h>
 #include <LiquidCrystal_I2C.h>
 #include <Fuzzy.h>
-#include "PumpClass.h"
-#include "TemperatureClass.h"
-#include "ScaleClass.h"
 #include <ArduinoJson.h>
-#include <SoftwareSerial.h>
-#include <arduino-timer.h>
+// #include <SoftwareSerial.h>
+#include <HX711.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
 
-// pin ph
-int phPin = A0;
+// pin
+const uint8_t phPin = A0;
+int dtPin = A1;
+int sckPin = A2;
+const uint8_t suhuPin = 1;
+const uint8_t asamPin = 3;
+const uint8_t basaPin = 5;
+const uint8_t aquascapePin = 7;
+const uint8_t mySerialRxPin = 8;
+const uint8_t mySerialTxPin = 10;
 
-// make object sensors
-DS18B20Sensor suhu(5);
-ScaleClass scaleFluid(A1, A2, 1013.60);
-PumpClass basaFluidToScale(2, "Basa", false, false, 0);
-PumpClass asamFluidToScale(3, "Asam", false, false, 0);
-PumpClass fluidToAquascape(4, ".", false, false, 0);
+// calibration factor for scale
+float calibrationFactor = 1000;
 
-// make object for softwareSerial
-SoftwareSerial mySerial(8, 9);
-
-unsigned long previousMillis = 0; // Menyimpan waktu terakhir LED berubah
-const long interval = 15000;      // Interval kedipan LED (dalam milidetik)
-const long intervalWait = 30000;
-
-// make variable for value sensors
-float suhuValue = 0;
-float phValue = 0;
-String ip;
-bool receivedBool = true;
+// value sensor
+float phValue;
+float suhuValue;
+uint8_t outputValue;
 bool giveFluid = false;
-int outputFuzzy;
-int scaleValue;
-bool wait;
+bool wait = false;
+bool pushScale = false;
+bool pushAquascape = false;
+bool asamOrBasa;
+bool emptyAsam = false;
+bool emptyBasa = false;
+const long interval = 1000;
+unsigned long previousMillis = 0;
+String ip;
 
-// make object for json
-StaticJsonDocument<200> doc;
+/*                                 make object                                                     */
+HX711 scaleSensor;                      // scale
+OneWire onewire(suhuPin);               // suhu
+DallasTemperature suhuSensor(&onewire); // suhu
+// SoftwareSerial mySerial(8, 9);          // serial komunikasi tambahan
+StaticJsonDocument<200> doc;        // object json
+LiquidCrystal_I2C lcd(0x27, 20, 4); // lcd
+Fuzzy *fuzzy = new Fuzzy();         // objecct fuzzy
 
-// make object lcd
-LiquidCrystal_I2C lcd(0x27, 20, 4);
+/*                               Functions                                   */
 
-// fuzzy
-Fuzzy *fuzzy = new Fuzzy();
+void displayFloatValue(int coloum, int row, float number)
+{
+    lcd.setCursor(coloum, row);
+    lcd.print(number);
+}
 
-// timer
-auto timer = timer_create_default();
+void deleteDisplay(int coloum, int row, bool full)
+{
+    lcd.setCursor(coloum, row);
+    if (full)
+    {
+        lcd.print("                   ");
+    }
+    else
+    {
+        lcd.print("          ");
+    }
+}
+
+void displaySentance(int coloum, int row, String sentance)
+{
+    lcd.setCursor(coloum, row);
+    lcd.print(sentance);
+}
+
+void displaySensors()
+{
+    displaySentance(0, 0, "Suhu    :");
+    displayFloatValue(9, 0, suhuValue);
+
+    displaySentance(0, 1, "PH      :");
+    displayFloatValue(9, 1, phValue);
+}
 
 // function for fuzzy setup
 void fuzzySetup()
@@ -137,35 +171,125 @@ void fuzzySetup()
     fuzzy->addFuzzyRule(FuzzyRule7);
 }
 
-void displaySensorsValue(int coloum, int row, float value)
+// fungsi fuzzy
+void executeFuzzy()
 {
-    lcd.setCursor(coloum, row);
-    lcd.print("         "); // Clear the previous value
-    lcd.setCursor(coloum, row);
-    lcd.print(value);
-}
-
-void displaySentance(int coloum, int row, String sentance, bool dl)
-{
-    if (dl)
+    if (phValue < 0 || phValue > 14)
     {
-        lcd.setCursor(coloum, row);
-        lcd.print("         ");
+        return;
     }
-    lcd.setCursor(coloum, row);
-    lcd.print(sentance);
+
+    if (phValue < 6.8)
+    {
+        asamOrBasa = false;
+    }
+    else
+    {
+        asamOrBasa = true;
+    }
+
+    // Set input for fuzzy logic
+    fuzzy->setInput(1, phValue);
+    fuzzy->fuzzify();
+    // Defuzzify and get output
+    outputValue = fuzzy->defuzzify(1);
+    pushScale = true;
+    giveFluid = true;
+    deleteDisplay(0, 0, true);
+    deleteDisplay(0, 1, true);
 }
 
-// make function for postion display sensors
-void displaySensors()
+void fluidToScale(bool asamOrBasa)
 {
-    // display suhu
-    displaySentance(0, 0, "Suhu    :", true);
-    displaySensorsValue(9, 0, suhuValue);
+    scaleSensor.power_up();
 
-    // display Ph
-    displaySentance(0, 1, "PH      :", true);
-    displaySensorsValue(9, 1, phValue);
+    unsigned long currentMillis = millis();
+
+    if (asamOrBasa)
+    {
+        digitalWrite(asamPin, HIGH);
+        displaySentance(0, 0, "Asam    :");
+        displayFloatValue(9, 0, outputValue);
+    }
+    else
+    {
+        digitalWrite(basaPin, HIGH);
+        displaySentance(0, 0, "Basa    :");
+        displayFloatValue(9, 0, outputValue);
+    }
+
+    displaySentance(0, 1, "scale   :");
+    float scaleValue;
+    if (scaleSensor.is_ready())
+    {
+        scaleValue = scaleSensor.get_units(10);
+        displayFloatValue(9, 1, scaleValue);
+    }
+    else
+    {
+        displaySentance(9, 1, "error");
+    }
+
+    if (scaleValue >= outputValue)
+    {
+        delay(2000);
+        if (asamOrBasa)
+        {
+            digitalWrite(asamPin, LOW);
+            emptyAsam = false;
+        }
+        else
+        {
+            digitalWrite(basaPin, LOW);
+            emptyBasa = false;
+        }
+        deleteDisplay(0, 0, true);
+        deleteDisplay(0, 0, true);
+        previousMillis = currentMillis;
+        outputValue = 0;
+        pushScale = false;
+        pushAquascape = true;
+        scaleSensor.power_down();
+        return;
+    }
+
+    if (currentMillis - previousMillis >= interval * 15)
+    {
+        if (asamOrBasa)
+        {
+            digitalWrite(asamPin, LOW);
+            emptyAsam = true;
+        }
+        else
+        {
+            digitalWrite(basaPin, LOW);
+            emptyBasa = true;
+        }
+        deleteDisplay(0, 0, true);
+        deleteDisplay(0, 0, true);
+        previousMillis = currentMillis;
+        outputValue = 0;
+        pushScale = false;
+        pushAquascape = true;
+        // scaleSensor.power_down();
+    }
+}
+
+void fluidToAquascape()
+{
+    displaySentance(0, 1, "  tunggu 10 detik  ");
+    unsigned long currentMillis = millis();
+    digitalWrite(aquascapePin, HIGH);
+    if (currentMillis - previousMillis >= interval * 10)
+    {
+        deleteDisplay(0, 1, true);
+        digitalWrite(aquascapePin, LOW);
+        previousMillis = currentMillis;
+        giveFluid = false;
+        pushAquascape = false;
+        wait = true;
+        displaySensors();
+    }
 }
 
 // Fungsi untuk menghitung nilai pH dari tegangan
@@ -175,23 +299,8 @@ float ph(float voltage)
 }
 int buf[10];
 
-// make function for suhu sensor
-bool executeSuhu(void *)
-{
-    suhuValue = suhu.getTemperature();
-    if (suhuValue < 0)
-    {
-        displaySentance(9, 0, "error", true);
-    }
-    else
-    {
-        displaySensorsValue(9, 0, suhuValue);
-    }
-    return true;
-}
-
 // make function for ph sensor
-bool executePh(void *)
+void executePh()
 {
     for (int i = 0; i < 10; i++)
     {
@@ -201,192 +310,119 @@ bool executePh(void *)
     float avgValue = 0;
     for (int i = 0; i < 10; i++)
         avgValue += buf[i];
-    float pHVol = (float)avgValue * 5.0 / 1023 / 10;
-    phValue = (-8.0251 * pHVol + 34.091);
-    displaySensorsValue(9, 1, phValue);
-    return true;
-}
+    phValue = (float)avgValue * 5.0 / 1023 / 10;
 
-// fungsi fuzzy
-void executeFuzzy()
-{
-
-    // Set input for fuzzy logic
-    fuzzy->setInput(1, phValue);
-    fuzzy->fuzzify();
-    // Defuzzify and get output
-    outputFuzzy = fuzzy->defuzzify(1);
-
-    giveFluid = true;
-    if (phValue < 6.8)
+    if (phValue < 0 && phValue > 14)
     {
-        basaFluidToScale.state = true;
+        displaySentance(9, 1, "error");
     }
     else
     {
-        asamFluidToScale.state = true;
+        displayFloatValue(9, 1, phValue);
     }
 }
 
-void pushToScale(int takaran, PumpClass &pump)
+void executeSuhu()
 {
-    unsigned long currentMillis = millis();
-    pump.on();
+    suhuSensor.requestTemperatures();
+    suhuValue = suhuSensor.getTempCByIndex(0);
+    deleteDisplay(9, 0, false);
 
-    scaleFluid.scaleOn();
-    scaleValue = scaleFluid.getWeight();
-    displaySensorsValue(10, 3, scaleValue);
-    if (takaran == scaleValue)
+    if (suhuValue < -10)
     {
-        previousMillis = currentMillis;
-        pump.empty = false;
-        pump.state = false;
-        return;
+        displaySentance(9, 0, "error");
     }
-
-    if (currentMillis - previousMillis >= interval)
+    else
     {
-        previousMillis = currentMillis;
-        pump.empty = true;
-        pump.state = false;
-        return;
+        displayFloatValue(9, 0, suhuValue);
     }
 }
 
-void pushToAquascape()
+void sendToEsp()
 {
-    unsigned long currentMillis = millis();
-
-    fluidToAquascape.on();
-
-    if (currentMillis - previousMillis >= interval)
+    if (Serial.available() == 0)
     {
-        previousMillis = currentMillis;
-        fluidToAquascape.off();
-        giveFluid = false;
-        wait = true;
+        doc["suhu"] = suhuValue;
+        doc["ph"] = phValue;
+        doc["emptyAsam"] = emptyAsam;
+        doc["emptyBasa"] = emptyBasa;
+
+        String output;
+        serializeJson(doc, output);
+        Serial.println(output);
+
+        doc.clear();
     }
 }
 
-// kirim data ke esp
-// void sendDataToEsp()
-// {
-//     doc["suhu"] = suhuValue;
-//     doc["ph"] = phValue;
-//     // doc["emptyAsam"] = basaFluidToScale.empty;
-//     // doc["emptyBasa"] = asamFluidToScale.empty;
-
-//     serializeJson(doc, Serial);
-//     Serial.print("\n");
-
-//     doc.clear();
-// }
-
-// dari esp ke mega
-// void received()
+// void receivedFromEsp()
 // {
 //     if (mySerial.available())
 //     {
-//         String msg = mySerial.readStringUntil('\n');
+//         String data = mySerial.readStringUntil('\n');
 
-//         if (msg == "sudah")
-//         {
-//             lcd.clear();
-//             displaySentance(0, 1, "      ^_____^      ");
-//             displaySentance(0, 2, "Terhubung telegram");
-//             delay(3000);
-//             lcd.clear();
-//             displaySensors();
-//             receivedBool = false;
-//         }
-//         else if (msg.length() > 5 && ip.length() == 0)
-//         {
-//             msg += ":8080";
-//             ip = msg;
-//         }
+//         ip = data;
 //     }
 // }
 
 void setup()
 {
     Serial.begin(9600);
-    mySerial.begin(9600);
-    // for initialize sensors
-    suhu.begin();                  // Manggil suhu
-    pinMode(phPin, INPUT);         // PH jadi input
-    scaleFluid.initialize();       // Nilai timbangan
-    asamFluidToScale.initialize(); // pompa asam nyala
-    basaFluidToScale.initialize(); // pompa basa nyala
-    fluidToAquascape.initialize(); // pompa ke aquascape nyala
+    // mySerial.begin(9600);
 
-    // fuzzy setup
-    fuzzySetup();
+    // pin pump
+    pinMode(asamPin, OUTPUT);
+    pinMode(basaPin, OUTPUT);
+    pinMode(aquascapePin, OUTPUT);
 
-    // lcd
+    pinMode(phPin, INPUT); // ph sensor
+    suhuSensor.begin();    // suhu sensor
+    fuzzySetup();          // fuzzy
+
     lcd.init();
     lcd.backlight();
+    // lcd
+    scaleSensor.begin(dtPin, sckPin, calibrationFactor);
 
-    // openng
-    displaySentance(0, 1, " Proyek Sistem IoT ", false);
-    displaySentance(0, 2, "  Electric -- Five  ", false);
-    delay(2000);
-    lcd.clear();
-
-    // menampilkan sensor
+    displaySentance(0, 1, "     Kelompok5     ");
+    displaySentance(0, 2, "   Electric Five   ");
+    delay(3000);
+    deleteDisplay(0, 1, true);
+    deleteDisplay(0, 2, true);
     displaySensors();
-
-    timer.every(500, executeSuhu);
-    timer.every(500, executePh);
 }
 
 void loop()
 {
-    timer.tick();
-
-    if (phValue < 0 || phValue > 14)
+    if (!giveFluid)
     {
-
-        displaySentance(9, 1, "error", true);
-    }
-    else if (phValue > 6.8 && phValue < 7.3)
-    {
-        displaySentance(0, 2, "Kondisi :", true);
-        displaySentance(9, 2, "Normal", true);
-    }
-    else
-    {
-        if (!giveFluid && wait)
+        executeSuhu();
+        executePh();
+        sendToEsp();
+        delay(1000);
+        if (!wait)
         {
             executeFuzzy();
         }
     }
-
-    if (giveFluid)
-    {
-        if (asamFluidToScale.state)
-        {
-            displaySentance(0, 2, asamFluidToScale.name + "    :", false);
-            displaySensorsValue(10, 2, outputFuzzy);
-            displaySentance(0, 3, "scale   :", false);
-            pushToScale(outputFuzzy, asamFluidToScale);
-        }
-
-        if (basaFluidToScale.state)
-        {
-            pushToScale(outputFuzzy, basaFluidToScale);
-        }
-
-        if (!asamFluidToScale.state && !basaFluidToScale.state)
-        {
-            pushToAquascape();
-        }
-    }
     else
     {
-        scaleFluid.scaleOff();
+        if (pushScale)
+        {
+            fluidToScale(asamOrBasa);
+        }
 
+        if (pushAquascape && !pushScale)
+        {
+            fluidToAquascape();
+        }
+    }
+
+    if (wait)
+    {
         unsigned long currentMillis = millis();
-        if (currentMillis - previousMillis >= intervalWait)
+
+        if (currentMillis - previousMillis >= interval * 60)
         {
             previousMillis = currentMillis;
             wait = false;

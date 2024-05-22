@@ -1,8 +1,9 @@
 #include <Arduino.h>
 #include <LiquidCrystal_I2C.h>
+#include <Wire.h>
 #include <Fuzzy.h>
 #include <ArduinoJson.h>
-// #include <SoftwareSerial.h>
+#include <SoftwareSerial.h>
 #include <HX711.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
@@ -35,15 +36,16 @@ bool emptyBasa = false;
 const long interval = 1000;
 unsigned long previousMillis = 0;
 String ip;
+int scaleValue;
 
 /*                                 make object                                                     */
-HX711 scaleSensor;                      // scale
-OneWire onewire(suhuPin);               // suhu
-DallasTemperature suhuSensor(&onewire); // suhu
-// SoftwareSerial mySerial(8, 9);          // serial komunikasi tambahan
-StaticJsonDocument<200> doc;        // object json
-LiquidCrystal_I2C lcd(0x27, 20, 4); // lcd
-Fuzzy *fuzzy = new Fuzzy();         // objecct fuzzy
+HX711 scaleSensor(dtPin, sckPin);                      // scale
+OneWire onewire(suhuPin);                              // suhu
+DallasTemperature suhuSensor(&onewire);                // suhu
+SoftwareSerial mySerial(mySerialRxPin, mySerialTxPin); // serial komunikasi tambahan
+StaticJsonDocument<200> doc;                           // object json
+LiquidCrystal_I2C lcd(0x27, 20, 4);                    // lcd
+Fuzzy *fuzzy = new Fuzzy();                            // objecct fuzzy
 
 /*                               Functions                                   */
 
@@ -201,7 +203,6 @@ void executeFuzzy()
 
 void fluidToScale(bool asamOrBasa)
 {
-    scaleSensor.power_up();
 
     unsigned long currentMillis = millis();
 
@@ -219,17 +220,10 @@ void fluidToScale(bool asamOrBasa)
     }
 
     displaySentance(0, 1, "scale   :");
-    float scaleValue;
-    if (scaleSensor.is_ready())
-    {
-        scaleSensor.set_scale(calibrationFactor);
-        scaleValue = scaleSensor.get_units();
-        displayFloatValue(9, 1, scaleValue);
-    }
-    else
-    {
-        displaySentance(9, 1, "error");
-    }
+    deleteDisplay(9, 1, false);
+    scaleSensor.set_scale(calibrationFactor);
+    scaleValue = scaleSensor.get_units(), 4;
+    displayFloatValue(9, 1, scaleValue);
 
     if (scaleValue >= outputValue)
     {
@@ -246,11 +240,11 @@ void fluidToScale(bool asamOrBasa)
         }
         deleteDisplay(0, 0, true);
         deleteDisplay(0, 0, true);
+        scaleValue = 0;
         previousMillis = currentMillis;
         outputValue = 0;
         pushScale = false;
         pushAquascape = true;
-        scaleSensor.power_down();
         return;
     }
 
@@ -268,11 +262,11 @@ void fluidToScale(bool asamOrBasa)
         }
         deleteDisplay(0, 0, true);
         deleteDisplay(0, 0, true);
+        scaleValue = 0;
         previousMillis = currentMillis;
         outputValue = 0;
         pushScale = false;
         pushAquascape = true;
-        // scaleSensor.power_down();
     }
 }
 
@@ -296,26 +290,21 @@ void fluidToAquascape()
 // Fungsi untuk menghitung nilai pH dari tegangan
 float ph(float voltage)
 {
-    return 7 + ((2.6 - voltage) / 0.35);
+    float phValue = (3.5 * voltage) + 0.5;
+    return phValue;
 }
-int buf[10];
 
-// make function for ph sensor
+// fungsi pembacaan sensor pH
 void executePh()
 {
-    for (int i = 0; i < 10; i++)
-    {
-        buf[i] = analogRead(phPin);
-        delay(300);
-    }
-    float avgValue = 0;
-    for (int i = 0; i < 10; i++)
-        avgValue += buf[i];
-    phValue = (float)avgValue * 5.0 / 1023 / 10;
+    int phRaw = analogRead(phPin);
+    float phVoltage = phRaw * (5.0 / 1023.0);
+    phValue = ph(phVoltage);
+    deleteDisplay(9, 1, false);
 
-    if (phValue < 0 && phValue > 14)
+    if (phValue < 0 || phValue > 14)
     {
-        displaySentance(9, 1, "error");
+        displaySentance(9, 1, "error!");
     }
     else
     {
@@ -339,22 +328,22 @@ void executeSuhu()
     }
 }
 
-void sendToEsp()
-{
-    if (Serial.available() == 0)
-    {
-        doc["suhu"] = suhuValue;
-        doc["ph"] = phValue;
-        doc["emptyAsam"] = emptyAsam;
-        doc["emptyBasa"] = emptyBasa;
+// void sendToEsp()
+// {
+//     if (Serial.available() == 0)
+//     {
+//         doc["suhu"] = suhuValue;
+//         doc["ph"] = phValue;
+//         doc["emptyAsam"] = emptyAsam;
+//         doc["emptyBasa"] = emptyBasa;
 
-        String output;
-        serializeJson(doc, output);
-        Serial.println(output);
+//         String output;
+//         serializeJson(doc, output);
+//         Serial.println(output);
 
-        doc.clear();
-    }
-}
+//         doc.clear();
+//     }
+// }
 
 // void receivedFromEsp()
 // {
@@ -369,8 +358,7 @@ void sendToEsp()
 void setup()
 {
     Serial.begin(9600);
-    // mySerial.begin(9600);
-    Serial.println("fajar daglog");
+    mySerial.begin(9600);
 
     // pin pump
     pinMode(asamPin, OUTPUT);
@@ -401,7 +389,7 @@ void loop()
     {
         executeSuhu();
         executePh();
-        sendToEsp();
+        // sendToEsp();
         delay(1000);
         if (!wait)
         {

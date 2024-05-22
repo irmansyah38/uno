@@ -8,10 +8,10 @@
 #include <DallasTemperature.h>
 
 // pin
-const uint8_t phPin = A0;
-int dtPin = A1;
-int sckPin = A2;
-const uint8_t suhuPin = 1;
+const int phPin = A0;
+const int dtPin = A2;
+const int sckPin = A4;
+const uint8_t suhuPin = 4;
 const uint8_t asamPin = 3;
 const uint8_t basaPin = 5;
 const uint8_t aquascapePin = 7;
@@ -222,7 +222,8 @@ void fluidToScale(bool asamOrBasa)
     float scaleValue;
     if (scaleSensor.is_ready())
     {
-        scaleValue = scaleSensor.get_units(10);
+        scaleSensor.set_scale(calibrationFactor);
+        scaleValue = scaleSensor.get_units();
         displayFloatValue(9, 1, scaleValue);
     }
     else
@@ -369,6 +370,7 @@ void setup()
 {
     Serial.begin(9600);
     // mySerial.begin(9600);
+    Serial.println("fajar daglog");
 
     // pin pump
     pinMode(asamPin, OUTPUT);
@@ -379,11 +381,12 @@ void setup()
     suhuSensor.begin();    // suhu sensor
     fuzzySetup();          // fuzzy
 
+    scaleSensor.set_scale();
+    scaleSensor.tare();
+
+    // lcd
     lcd.init();
     lcd.backlight();
-    // lcd
-    scaleSensor.begin(dtPin, sckPin, calibrationFactor);
-
     displaySentance(0, 1, "     Kelompok5     ");
     displaySentance(0, 2, "   Electric Five   ");
     delay(3000);

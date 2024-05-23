@@ -2,7 +2,6 @@
 #include <LiquidCrystal_I2C.h>
 #include <Wire.h>
 #include <Fuzzy.h>
-#include <ArduinoJson.h>
 #include <SoftwareSerial.h>
 #include <HX711.h>
 #include <OneWire.h>
@@ -10,8 +9,8 @@
 
 // pin
 const int phPin = A0;
-const int dtPin = A2;
-const int sckPin = A4;
+#define dtPin A2
+#define sckPin A4
 const uint8_t suhuPin = 4;
 const uint8_t asamPin = 3;
 const uint8_t basaPin = 5;
@@ -20,7 +19,7 @@ const uint8_t mySerialRxPin = 8;
 const uint8_t mySerialTxPin = 10;
 
 // calibration factor for scale
-float calibrationFactor = 1000;
+float calibrationFactor = 861.70;
 
 // value sensor
 float phValue;
@@ -35,7 +34,7 @@ bool emptyAsam = false;
 bool emptyBasa = false;
 const long interval = 1000;
 unsigned long previousMillis = 0;
-String ip;
+String received;
 int scaleValue;
 
 /*                                 make object                                                     */
@@ -43,7 +42,6 @@ HX711 scaleSensor(dtPin, sckPin);                      // scale
 OneWire onewire(suhuPin);                              // suhu
 DallasTemperature suhuSensor(&onewire);                // suhu
 SoftwareSerial mySerial(mySerialRxPin, mySerialTxPin); // serial komunikasi tambahan
-StaticJsonDocument<200> doc;                           // object json
 LiquidCrystal_I2C lcd(0x27, 20, 4);                    // lcd
 Fuzzy *fuzzy = new Fuzzy();                            // objecct fuzzy
 
@@ -222,7 +220,7 @@ void fluidToScale(bool asamOrBasa)
     displaySentance(0, 1, "scale   :");
     deleteDisplay(9, 1, false);
     scaleSensor.set_scale(calibrationFactor);
-    scaleValue = scaleSensor.get_units(), 4;
+    scaleValue = scaleSensor.get_units(10), 4;
     displayFloatValue(9, 1, scaleValue);
 
     if (scaleValue >= outputValue)
@@ -328,32 +326,29 @@ void executeSuhu()
     }
 }
 
-// void sendToEsp()
-// {
-//     if (Serial.available() == 0)
-//     {
-//         doc["suhu"] = suhuValue;
-//         doc["ph"] = phValue;
-//         doc["emptyAsam"] = emptyAsam;
-//         doc["emptyBasa"] = emptyBasa;
+void sendToEsp()
+{
+    String jsonString = "{\"suhu\":";
+    jsonString += suhuValue;
+    jsonString += ",\"ph\":";
+    jsonString += phValue;
+    jsonString += ",\"emptyAsam\":";
+    jsonString += emptyAsam;
+    jsonString += ",\"emptyBasa\":";
+    jsonString += emptyBasa;
+    jsonString += "}";
+    Serial.println(jsonString);
+}
 
-//         String output;
-//         serializeJson(doc, output);
-//         Serial.println(output);
+void receivedFromEsp()
+{
 
-//         doc.clear();
-//     }
-// }
-
-// void receivedFromEsp()
-// {
-//     if (mySerial.available())
-//     {
-//         String data = mySerial.readStringUntil('\n');
-
-//         ip = data;
-//     }
-// }
+    if (mySerial.available())
+    {
+        String data = mySerial.readStringUntil('\n');
+        received = data;
+    }
+}
 
 void setup()
 {
@@ -383,14 +378,37 @@ void setup()
     displaySensors();
 }
 
+void displayIP()
+{
+    deleteDisplay(0, 3, true);
+    deleteDisplay(0, 2, true);
+    if (received == "belum")
+    {
+        displaySentance(0, 3, "tidak konek wifi");
+    }
+    else if (received == "sudah")
+    {
+        displaySentance(0, 3, "Sudah terhubung");
+    }
+    else if (received.length() > 6)
+    {
+        displaySentance(0, 2, "Masuk link di bawah");
+        received += ":8080";
+        displaySentance(0, 3, received);
+    }
+}
+
 void loop()
 {
+    sendToEsp();
+    receivedFromEsp();
+    displayIP();
     if (!giveFluid)
     {
         executeSuhu();
         executePh();
-        // sendToEsp();
         delay(1000);
+
         if (!wait)
         {
             executeFuzzy();

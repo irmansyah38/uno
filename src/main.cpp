@@ -32,7 +32,7 @@ bool emptyAsam = false;
 bool emptyBasa = false;
 const long interval = 1000;
 unsigned long previousMillis = 0;
-String received;
+String data;
 
 /*                                 make object                                                     */
 HX711 scaleSensor(dtPin, sckPin);                      // scale
@@ -160,12 +160,12 @@ void executeFuzzy()
 {
   if (phValue > 7.3)
   {
-    asamOrBasa = false;
+    asamOrBasa = true;
   }
 
   if (phValue < 6.8)
   {
-    asamOrBasa = true;
+    asamOrBasa = false;
   }
 
   // Set input for fuzzy logic
@@ -177,11 +177,107 @@ void executeFuzzy()
   lcd.clear();
 }
 
+void givePHFluid(bool kondisi)
+{
+  lcd.clear();
+  if (kondisi)
+  {
+    displaySentance(0, 0, "Asam    :");
+    digitalWrite(asamPin, HIGH);
+  }
+  else
+  {
+    displaySentance(0, 0, "Basa    :");
+    digitalWrite(basaPin, HIGH);
+  }
+
+  displayFloatValue(9, 0, outputValue);
+
+  displaySentance(0, 1, "scale   :");
+  bool condition = true;
+  float scaleValue;
+  scaleSensor.power_up();
+  scaleSensor.tare();
+  while (condition)
+  {
+    if (scaleSensor.is_ready())
+    {
+      scaleSensor.set_scale(calibrationFactor);
+      scaleValue = scaleSensor.get_units(), 4;
+      displayFloatValue(9, 1, scaleValue);
+    }
+    else
+    {
+      displaySentance(9, 1, "error");
+    }
+
+    unsigned long currentMillis = millis();
+    if (scaleValue >= outputValue)
+    {
+      previousMillis = currentMillis;
+      if (kondisi)
+      {
+        emptyAsam = false;
+      }
+      else
+      {
+        emptyBasa = false;
+      }
+
+      condition = false;
+    }
+
+    if (currentMillis - previousMillis >= interval * 20)
+    {
+      previousMillis = currentMillis;
+      if (kondisi)
+      {
+        emptyAsam = true;
+      }
+      else
+      {
+        emptyBasa = true;
+      }
+      condition = false;
+    }
+  }
+
+  scaleSensor.power_down();
+
+  if (kondisi)
+  {
+    digitalWrite(asamPin, LOW);
+  }
+  else
+  {
+    digitalWrite(basaPin, LOW);
+  }
+
+  lcd.clear();
+  displaySentance(0, 1, "  tunggu 15 detik  ");
+
+  condition = true;
+  digitalWrite(aquascapePin, HIGH);
+  while (condition)
+  {
+    unsigned long currentMillis = millis();
+    if (currentMillis - previousMillis >= interval * 15)
+    {
+      previousMillis = currentMillis;
+      condition = false;
+    }
+  }
+  digitalWrite(aquascapePin, LOW);
+  wait = true;
+  giveFluid = false;
+  lcd.clear();
+  displaySensors();
+}
+
 // Fungsi untuk menghitung nilai pH dari tegangan
 float ph(float voltage)
 {
-  float phValue = (3.5 * voltage) + 0.5;
-  return phValue;
+  return 7 + ((2.5 - voltage) / 0.18);
 }
 
 // fungsi pembacaan sensor pH
@@ -234,32 +330,30 @@ void sendToEsp()
 
 void receivedFromEsp()
 {
-
-  if (mySerial.available())
+  if (mySerial.available() == 0)
   {
-    String data = mySerial.readStringUntil('\n');
-    received = data;
+    data = mySerial.readStringUntil('\n');
   }
 }
-// void displayIP()
-// {
-//   deleteDisplay(0, 3, true);
-//   deleteDisplay(0, 2, true);
-//   if (received == "belum")
-//   {
-//     displaySentance(0, 3, "tidak konek wifi");
-//   }
-//   else if (received == "sudah")
-//   {
-//     displaySentance(0, 3, "Sudah terhubung");
-//   }
-//   else if (received.length() > 6)
-//   {
-//     displaySentance(0, 2, "Masuk link di bawah");
-//     received += ":8080";
-//     displaySentance(0, 3, received);
-//   }
-// }
+
+void isConnectedEsp()
+{
+  displaySentance(0, 3, "                   ");
+  if (data == "s")
+  {
+    displaySentance(0, 3, "sudah terkoneksi");
+  }
+  else if (data.length() > 10)
+  {
+    data += ":8080";
+    displaySentance(0, 3, data);
+    displaySentance(0, 3, "sudah terkoneksi");
+  }
+  else
+  {
+    displaySentance(0, 3, "belum terkoneksi");
+  }
+}
 
 void setup()
 {
@@ -273,7 +367,7 @@ void setup()
 
   pinMode(phPin, INPUT); // ph sensor
   suhuSensor.begin();    // suhu sensor
-  // fuzzySetup();          // fuzzy
+  fuzzySetup();          // fuzzy
 
   scaleSensor.set_scale();
   scaleSensor.tare();
@@ -290,9 +384,9 @@ void setup()
 
 void loop()
 {
-  // sendToEsp();
-  // receivedFromEsp();
-  // displayIP();
+  sendToEsp();
+  receivedFromEsp();
+  isConnectedEsp();
   if (!giveFluid)
   {
     executeSuhu();
@@ -309,99 +403,7 @@ void loop()
   }
   else
   {
-    lcd.clear();
-    if (asamOrBasa)
-    {
-      displaySentance(0, 0, "Asam    :");
-      digitalWrite(asamPin, HIGH);
-    }
-    else
-    {
-      displaySentance(0, 0, "Basa    :");
-      digitalWrite(basaPin, HIGH);
-    }
-
-    displayFloatValue(9, 0, outputValue);
-
-    displaySentance(0, 1, "scale   :");
-    bool condition = true;
-    float scaleValue;
-    scaleSensor.power_up();
-    scaleSensor.tare();
-    while (condition)
-    {
-      if (scaleSensor.is_ready())
-      {
-        scaleSensor.set_scale(calibrationFactor);
-        scaleValue = scaleSensor.get_units(), 4;
-        displayFloatValue(9, 1, scaleValue);
-      }
-      else
-      {
-        displaySentance(9, 1, "error");
-      }
-
-      unsigned long currentMillis = millis();
-      if (scaleValue >= outputValue)
-      {
-        previousMillis = currentMillis;
-        if (asamOrBasa)
-        {
-          emptyAsam = false;
-        }
-        else
-        {
-          emptyBasa = false;
-        }
-
-        condition = false;
-      }
-
-      if (currentMillis - previousMillis >= interval * 20)
-      {
-        previousMillis = currentMillis;
-        if (asamOrBasa)
-        {
-          emptyAsam = true;
-        }
-        else
-        {
-          emptyBasa = true;
-        }
-        condition = false;
-      }
-    }
-
-    scaleSensor.power_down();
-
-    if (asamOrBasa)
-    {
-      digitalWrite(asamPin, LOW);
-    }
-    else
-    {
-      digitalWrite(basaPin, LOW);
-    }
-
-    lcd.clear();
-    displaySentance(0, 1, "  tunggu 15 detik  ");
-
-    condition = true;
-    digitalWrite(aquascapePin, HIGH);
-    while (condition)
-    {
-      unsigned long currentMillis = millis();
-      if (currentMillis - previousMillis >= interval * 15)
-      {
-        previousMillis = currentMillis;
-        condition = false;
-      }
-    }
-    digitalWrite(aquascapePin, LOW);
-    wait = true;
-    giveFluid = false;
-    lcd.clear();
-    displaySensors();
+    givePHFluid(asamOrBasa);
   }
   if (wait)
   {

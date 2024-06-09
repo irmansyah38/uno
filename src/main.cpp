@@ -8,9 +8,9 @@
 #include <DallasTemperature.h>
 
 // pin
-const int phPin = A0;
-#define dtPin A2
-#define sckPin A4
+const int phPin = A2;
+#define dtPin A0
+#define sckPin A1
 const uint8_t suhuPin = 4;
 const uint8_t asamPin = 3;
 const uint8_t basaPin = 5;
@@ -33,6 +33,7 @@ bool emptyBasa = false;
 const long interval = 1000;
 unsigned long previousMillis = 0;
 String data;
+String curentStatus;
 
 /*                                 make object                                                     */
 HX711 scaleSensor(dtPin, sckPin);                      // scale
@@ -179,16 +180,18 @@ void executeFuzzy()
 
 void givePHFluid(bool kondisi)
 {
+  mySerial.end();
+  Serial.end();
   lcd.clear();
   if (kondisi)
   {
     displaySentance(0, 0, "Asam    :");
-    digitalWrite(asamPin, HIGH);
+    digitalWrite(asamPin, LOW);
   }
   else
   {
     displaySentance(0, 0, "Basa    :");
-    digitalWrite(basaPin, HIGH);
+    digitalWrite(basaPin, LOW);
   }
 
   displayFloatValue(9, 0, outputValue);
@@ -200,15 +203,16 @@ void givePHFluid(bool kondisi)
   scaleSensor.tare();
   while (condition)
   {
-    if (scaleSensor.is_ready())
+
+    scaleSensor.set_scale(calibrationFactor);
+    scaleValue = scaleSensor.get_units(), 4;
+    if (scaleValue < 0)
     {
-      scaleSensor.set_scale(calibrationFactor);
-      scaleValue = scaleSensor.get_units(), 4;
-      displayFloatValue(9, 1, scaleValue);
+      displayFloatValue(9, 1, 0);
     }
     else
     {
-      displaySentance(9, 1, "error");
+      displayFloatValue(9, 1, scaleValue);
     }
 
     unsigned long currentMillis = millis();
@@ -246,32 +250,40 @@ void givePHFluid(bool kondisi)
 
   if (kondisi)
   {
-    digitalWrite(asamPin, LOW);
+    digitalWrite(asamPin, HIGH);
   }
   else
   {
-    digitalWrite(basaPin, LOW);
+    digitalWrite(basaPin, HIGH);
   }
-
+  delay(2000);
   lcd.clear();
   displaySentance(0, 1, "  tunggu 15 detik  ");
 
   condition = true;
-  digitalWrite(aquascapePin, HIGH);
-  while (condition)
-  {
-    unsigned long currentMillis = millis();
-    if (currentMillis - previousMillis >= interval * 15)
-    {
-      previousMillis = currentMillis;
-      condition = false;
-    }
-  }
   digitalWrite(aquascapePin, LOW);
+
+  delay(interval * 15);
+
+  digitalWrite(aquascapePin, HIGH);
   wait = true;
   giveFluid = false;
   lcd.clear();
+  mySerial.begin(9600);
+  Serial.begin(9600);
   displaySensors();
+  if (data == "s")
+  {
+    displaySentance(0, 3, "sudah terkoneksi");
+  }
+  else if (data.length() > 10)
+  {
+    displaySentance(0, 3, data);
+  }
+  else if (data == "b")
+  {
+    displaySentance(0, 3, "belum terkoneksi");
+  }
 }
 
 // Fungsi untuk menghitung nilai pH dari tegangan
@@ -290,7 +302,7 @@ void executePh()
 
   if (phValue < 0 || phValue > 14)
   {
-    displaySentance(9, 1, "error!");
+    displaySentance(9, 1, "error");
   }
   else
   {
@@ -326,32 +338,45 @@ void sendToEsp()
   jsonString += emptyBasa;
   jsonString += "}";
   Serial.println(jsonString);
+  delay(500);
 }
 
 void receivedFromEsp()
 {
-  if (mySerial.available() == 0)
+  if (mySerial.available())
   {
-    data = mySerial.readStringUntil('\n');
+    String dt = mySerial.readStringUntil('\n');
+
+    if (dt.length() > 10 && data.length() > 10)
+    {
+      return;
+    }
+
+    data = dt;
+
+    delay(100);
   }
 }
 
 void isConnectedEsp()
 {
-  displaySentance(0, 3, "                   ");
-  if (data == "s")
+  if (data != curentStatus)
   {
-    displaySentance(0, 3, "sudah terkoneksi");
-  }
-  else if (data.length() > 10)
-  {
-    data += ":8080";
-    displaySentance(0, 3, data);
-    displaySentance(0, 3, "sudah terkoneksi");
-  }
-  else
-  {
-    displaySentance(0, 3, "belum terkoneksi");
+    curentStatus = data;
+    displaySentance(0, 3, "                    ");
+    if (data == "s")
+    {
+      displaySentance(0, 3, "sudah terkoneksi");
+    }
+    else if (data.length() > 10)
+    {
+      displaySentance(0, 3, data);
+    }
+    else if (data == "b")
+    {
+      displaySentance(0, 3, "belum terkoneksi");
+    }
+    delay(100);
   }
 }
 
@@ -364,6 +389,9 @@ void setup()
   pinMode(asamPin, OUTPUT);
   pinMode(basaPin, OUTPUT);
   pinMode(aquascapePin, OUTPUT);
+  digitalWrite(asamPin, HIGH);
+  digitalWrite(basaPin, HIGH);
+  digitalWrite(aquascapePin, HIGH);
 
   pinMode(phPin, INPUT); // ph sensor
   suhuSensor.begin();    // suhu sensor
@@ -401,15 +429,17 @@ void loop()
       }
     }
   }
-  else
+
+  if (giveFluid)
   {
     givePHFluid(asamOrBasa);
   }
+
   if (wait)
   {
     unsigned long currentMillis = millis();
 
-    if (currentMillis - previousMillis >= interval * 60)
+    if (currentMillis - previousMillis >= interval * 10)
     {
       previousMillis = currentMillis;
       wait = false;

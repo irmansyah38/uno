@@ -19,21 +19,21 @@ const uint8_t mySerialRxPin = 8;
 const uint8_t mySerialTxPin = 10;
 
 // calibration factor for scale
-float calibrationFactor = 861.70;
+float calibrationFactor = 183.60;
 
 // value sensor
 float phValue;
 float suhuValue;
 uint8_t outputValue;
 bool giveFluid = false;
-bool wait = false;
+bool wait = true;
 bool asamOrBasa; // true untuk asam dan false untuk basa
 bool emptyAsam = false;
 bool emptyBasa = false;
 const long interval = 1000;
 unsigned long previousMillis = 0;
 String data;
-String curentStatus;
+bool change = false;
 
 /*                                 make object                                                     */
 HX711 scaleSensor(dtPin, sckPin);                      // scale
@@ -180,8 +180,6 @@ void executeFuzzy()
 
 void givePHFluid(bool kondisi)
 {
-  mySerial.end();
-  Serial.end();
   lcd.clear();
   if (kondisi)
   {
@@ -269,35 +267,17 @@ void givePHFluid(bool kondisi)
   wait = true;
   giveFluid = false;
   lcd.clear();
-  mySerial.begin(9600);
-  Serial.begin(9600);
   displaySensors();
-  if (data == "s")
-  {
-    displaySentance(0, 3, "sudah terkoneksi");
-  }
-  else if (data.length() > 10)
-  {
-    displaySentance(0, 3, data);
-  }
-  else if (data == "b")
-  {
-    displaySentance(0, 3, "belum terkoneksi");
-  }
-}
-
-// Fungsi untuk menghitung nilai pH dari tegangan
-float ph(float voltage)
-{
-  return 7 + ((2.5 - voltage) / 0.18);
 }
 
 // fungsi pembacaan sensor pH
 void executePh()
 {
-  int phRaw = analogRead(phPin);
-  float phVoltage = phRaw * (5.0 / 1023.0);
-  phValue = ph(phVoltage);
+  int nilaiPengukuranPh = analogRead(phPin);
+  double TeganganPh = 5 / 1024.0 * nilaiPengukuranPh;
+  // Po = 7.00 + ((teganganPh7 - TeganganPh) / PhStep);
+  phValue = 7.00 + ((2.5 - TeganganPh) / 0.33);
+
   displaySentance(9, 1, "         ");
 
   if (phValue < 0 || phValue > 14)
@@ -346,37 +326,35 @@ void receivedFromEsp()
   if (mySerial.available())
   {
     String dt = mySerial.readStringUntil('\n');
+    delay(500);
 
-    if (dt.length() > 10 && data.length() > 10)
+    if (dt != data)
     {
-      return;
+      data = dt;
+      change = true;
     }
-
-    data = dt;
-
-    delay(100);
   }
 }
 
 void isConnectedEsp()
 {
-  if (data != curentStatus)
+  change = false;
+  displaySentance(0, 2, "                    ");
+  if (data == "s")
   {
-    curentStatus = data;
-    displaySentance(0, 3, "                    ");
-    if (data == "s")
-    {
-      displaySentance(0, 3, "sudah terkoneksi");
-    }
-    else if (data.length() > 10)
-    {
-      displaySentance(0, 3, data);
-    }
-    else if (data == "b")
-    {
-      displaySentance(0, 3, "belum terkoneksi");
-    }
-    delay(100);
+    displaySentance(0, 2, "sudah terkoneksi");
+  }
+  else if (data.length() >= 7)
+  {
+    displaySentance(0, 2, data + ":90");
+  }
+  else if (data == "b")
+  {
+    displaySentance(0, 2, "belum terkoneksi");
+  }
+  else
+  {
+    return;
   }
 }
 
@@ -414,7 +392,10 @@ void loop()
 {
   sendToEsp();
   receivedFromEsp();
-  isConnectedEsp();
+  if (change)
+  {
+    isConnectedEsp();
+  }
   if (!giveFluid)
   {
     executeSuhu();
@@ -439,7 +420,7 @@ void loop()
   {
     unsigned long currentMillis = millis();
 
-    if (currentMillis - previousMillis >= interval * 10)
+    if (currentMillis - previousMillis >= interval * 120)
     {
       previousMillis = currentMillis;
       wait = false;
